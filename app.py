@@ -172,7 +172,7 @@ with tab4:
             md.extend([f"### [{i}] {s['title']}",s["url"],f"Retrieved: {s['retrieved_utc']}"])
             for x in s["excerpts"]:
                 md.append(f"- {x['page']} — {x['topic']}: {x['excerpt']}")
-        st.download_button("Download research brief (.md)","\\n\\n".join(md),"fintrace_research_brief.md","text/markdown")
+        st.download_button("Download research brief (.md)","\n\n".join(md),"fintrace_research_brief.md","text/markdown")
         st.download_button("Download full evidence ledger (.json)",json.dumps(payload,indent=2,ensure_ascii=False),"fintrace_evidence.json","application/json")
         st.download_button("Download evidence table (.csv)",pd.DataFrame([{"title":s["title"],"url":s["url"],"page":x["page"],"topic":x["topic"],"excerpt":x["excerpt"]} for s in records for x in s["excerpts"]]).to_csv(index=False),"fintrace_evidence.csv","text/csv")
         st.success("The exported brief includes evidence links and explicit uncertainty labels.")
