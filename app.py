@@ -1,103 +1,181 @@
 import streamlit as st
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
-from urllib.parse import urlparse
+import json
 import re
 from datetime import datetime, timezone
+from urllib.parse import urlparse
+from research_engine import discover, investigate, investigate_claims, cross_check
 
-st.set_page_config(page_title="FINTRACE AI | Evidence Investigator", page_icon="🔎", layout="wide")
+st.set_page_config(page_title="FINTRACE AI | Financial Investigator",page_icon="🔎",layout="wide")
+st.markdown("""<style>
+.block-container {padding-top:2rem;max-width:1250px}
+[data-testid="stMetric"] {border:1px solid #dfe6ec;border-radius:12px;padding:12px}
+</style>""",unsafe_allow_html=True)
 st.title("🔎 FINTRACE AI")
-st.caption("Beyond the Numbers · Track C — Consumer, FMCG & Retail")
-st.info("Working prototype: public HTML evidence retrieval, transparent financial calculations, and an adversarial review checklist. Autonomous source discovery, independent triangulation, and agent-driven falsification are planned, not yet implemented.")
+st.caption("BEYOND THE NUMBERS · ATMOS 2026 · TRACK C — CONSUMER, FMCG & RETAIL")
+st.markdown("**Autonomous source discovery → Evidence extraction → Financial hypothesis lab → Adversarial checks → Downloadable research brief**")
+st.warning("Research preview, not investment advice. Search and extraction are automated; hypotheses and contradiction leads are NOT automatically verified. Finance calculations require verified input until structured extraction is implemented.")
 
-SOURCES = {
-    "Hindustan Unilever": [
-        ("HUL FY26 performance", "https://hul-performance-highlights.hul.co.in/performance-highlights-fy-2025-2026/performance/financial/", "Company performance"),
-        ("HUL March 2026 results", "https://www.hul.co.in/news/press-releases/2026/march-quarter-and-financial-year-2026-results/", "Company results"),
-        ("NSE HUL filing", "https://nsearchives.nseindia.com/corporate/ixbrl/INTEGRATED_FILING_INDAS_179457_28072026194155_iXBRL_WEB.html", "Exchange filing")
-    ],
-    "Custom company / URLs": []
-}
-company = st.selectbox("Company", list(SOURCES))
-urls = st.text_area("Additional public HTTPS source URLs (one per line)", height=95, placeholder="https://example.com/investor-relations/...")
+with st.sidebar:
+    st.header("Research settings")
+    company=st.text_input("Company to investigate",value="Hindustan Unilever")
+    st.caption("Works with company names beyond the example; source access and disclosure quality vary.")
+    max_sources=st.slider("Maximum sources to fetch",2,10,6)
+    st.info("Public HTTPS pages and text-based PDFs supported. Some exchange websites block automated retrieval.")
+    st.markdown("[GitHub source code](https://github.com/giaamadan2027/bitspilani-comp)")
 
-def fetch_evidence(url):
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.netloc:
-        raise ValueError("A valid HTTPS URL is required")
-    response = requests.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0 (compatible; FINTRACE research prototype)"})
-    response.raise_for_status()
-    ctype = response.headers.get("Content-Type", "")
-    if "html" not in ctype.lower() and "text" not in ctype.lower():
-        raise ValueError("This prototype supports HTML/text pages; PDF parsing is planned.")
-    soup = BeautifulSoup(response.text, "html.parser")
-    for el in soup(["script", "style", "nav", "footer", "header"]):
-        el.decompose()
-    return re.sub(r"\s+", " ", soup.get_text(" ", strip=True))[:100000]
+tab1,tab2,tab3,tab4=st.tabs(["🔍 Discover sources","📑 Evidence & hypotheses","📊 Financial analysis","🧾 Export research brief"])
 
-if st.button("Collect and inspect public evidence", type="primary"):
-    entries = SOURCES[company] + [
-        (f"Custom source {i+1}", url.strip(), "User-supplied")
-        for i, url in enumerate(urls.splitlines()) if url.strip()
+with tab1:
+    st.subheader("1 · Search for public company disclosures")
+    st.write("Search investor relations, financial results, industry news and investor presentations, then choose sources for extraction.")
+    if st.button("Discover public sources",type="primary"):
+        with st.spinner("Searching public indexes…"):
+            hits,issues=discover(company,limit=14)
+        st.session_state["hits"]=hits
+        st.session_state["issues"]=issues
+        st.session_state.pop("records",None)
+    for issue in st.session_state.get("issues",[]):
+        st.caption("Search note: "+issue)
+    hits=st.session_state.get("hits",[])
+    if hits:
+        st.dataframe(pd.DataFrame(hits)[["title","url","discovered_via"]],use_container_width=True,hide_index=True)
+    else:
+        st.info("Search results will appear here. Automated public search may be blocked; enter official URLs below instead.")
+    with st.form("sources"):
+        manual=st.text_area("Add official HTTPS sources, one URL per line",height=100,placeholder="https://www.company.com/investors/annual-report.pdf")
+        st.caption("For a credible demo, prioritize official investor-relations documents, NSE/BSE disclosures and company earnings presentations.")
+        run=st.form_submit_button("Investigate sources",type="primary")
+    if run:
+        chosen=list(hits)
+        for i,url in enumerate(manual.splitlines()):
+            url=url.strip()
+            if url:
+                chosen.insert(i,{"title":f"Researcher-supplied source {i+1}","url":url,"discovered_via":"User supplied"})
+        if not chosen:st.error("Discover sources or enter at least one official source URL.")
+        else:
+            with st.spinner("Retrieving documents and extracting evidence…"):
+                records,failures=investigate(company,chosen,max_sources)
+            st.session_state["records"]=records
+            st.session_state["failures"]=failures
+            st.session_state["research_company"]=company
+            st.success(f"Retrieved {len(records)} source(s); {len(failures)} failed.")
+            st.caption("Open the Evidence tab for page-linked excerpts.")
+
+with tab2:
+    records=st.session_state.get("records",[])
+    st.subheader("2 · Auditable evidence ledger")
+    if records:
+        a,b,c=st.columns(3)
+        a.metric("Documents accessed",len(records))
+        b.metric("Distinct source hosts",cross_check(records))
+        c.metric("Extracted excerpts",sum(len(r["excerpts"]) for r in records))
+        st.caption("Different hosts are a rough provenance indicator, NOT proof of independent corroboration.")
+        for i,rec in enumerate(records,1):
+            with st.expander(f"{i:02d} · {rec['title'][:85]} · {rec['format']}"):
+                st.markdown(f"**Original:** [{rec['url']}]({rec['url']})")
+                st.caption(f"Retrieved {rec['retrieved_utc']} · {rec['pages_read']} extracted page(s) · {rec['discovered_via']}")
+                for x in rec["excerpts"]:
+                    st.markdown(f"**{x['topic']} · {x['page']}**")
+                    st.write(x["excerpt"])
+        st.subheader("3 · Potential contradiction / hypothesis leads")
+        leads=investigate_claims(records)
+        st.caption("These are keyword-linked research leads, not verified contradictions. Compare comparable periods, units and reporting definitions before claiming inconsistency.")
+        if leads:
+            st.dataframe(pd.DataFrame(leads)[["candidate_claim","snippet","url","page","status"]],hide_index=True,use_container_width=True)
+        else:st.info("No claim leads found in extracted excerpts.")
+    else:st.info("Run source investigation first.")
+    if st.session_state.get("failures"):
+        with st.expander("Retrieval failures and limitations"):
+            st.dataframe(pd.DataFrame(st.session_state["failures"]),hide_index=True,use_container_width=True)
+
+with tab3:
+    st.subheader("4 · Reproducible financial calculations")
+    st.write("Enter values from verified financial statements. Do not mix standalone/consolidated or different reporting periods.")
+    l,r=st.columns(2)
+    with l:
+        usg=st.number_input("Underlying sales growth (%)",value=5.0,step=0.1)
+        uvg=st.number_input("Underlying volume growth (%)",value=4.0,step=0.1)
+        if uvg>-100:
+            residual=100*((1+usg/100)/(1+uvg/100)-1)
+            st.metric("Implied price/mix residual",f"{residual:.2f}%")
+        else:
+            residual=None;st.error("UVG must be greater than -100%.")
+        st.caption("Illustrative defaults reflect previously reported HUL FY26 metrics. Residual is not pure price inflation; volume definitions can include product mix.")
+    with r:
+        receivables=st.number_input("Average trade receivables (₹ crore)",min_value=0.0,value=0.0)
+        sales=st.number_input("Annual credit sales / proxy revenue (₹ crore)",min_value=0.0,value=0.0)
+        recdays=(receivables/sales*365 if sales>0 else None)
+        st.metric("Approx. receivable days",f"{recdays:.1f}" if recdays is not None else "Enter figures")
+        st.caption("Prefer average receivables ÷ credit sales × 365; state when revenue is a proxy.")
+    st.subheader("5 · Self-falsification checks")
+    checklist=[
+        "Find a rival primary-source explanation for the observed trend",
+        "Verify dates, accounting basis and metric definitions",
+        "Compare at least one peer over comparable periods",
+        "Test whether acquisition/divestment, seasonality or product mix explains the pattern",
+        "Identify a measurable future condition that would overturn the hypothesis",
+        "Downgrade or reject findings that lack independent evidence"
     ]
-    if not entries:
-        st.warning("Add at least one source URL.")
+    chosen=[]
+    for i,item in enumerate(checklist):
+        if st.checkbox(item,key="check_"+str(i)): chosen.append(item)
+    hypothesis=st.text_area("Working hypothesis (not an established discovery)",placeholder="Company X appears to have ...")
+    opposing=st.text_area("Strongest counterargument / disconfirming evidence",placeholder="An alternative explanation may be ...")
+    falsifier=st.text_area("Falsification condition",placeholder="This interpretation would weaken if ...")
+    st.session_state["manual_findings"]={"hypothesis":hypothesis,"counterargument":opposing,"falsification":falsifier,"checks":chosen}
+    st.info("Evidence strength remains UNASSESSED until an analyst validates claim-source alignment, corroboration and counterevidence.")
+
+with tab4:
+    st.subheader("6 · Export research brief")
+    records=st.session_state.get("records",[])
+    findings=st.session_state.get("manual_findings",{})
+    if not records:
+        st.info("Investigate at least one source to export a report.")
     else:
-        records = []
-        with st.spinner("Fetching sources…"):
-            for name, url, kind in entries:
-                try:
-                    txt = fetch_evidence(url)
-                    matches = list(re.finditer(r"(?i)underlying (?:sales|volume) growth|turnover|receivables|inventory|quick commerce|revenue", txt))[:12]
-                    excerpts = [txt[max(0,m.start()-110):min(len(txt),m.end()+180)] for m in matches]
-                    records.append({"Source":name,"Type":kind,"URL":url,"Retrieved UTC":datetime.now(timezone.utc).isoformat(timespec="seconds"),"Text length":len(txt),"Evidence excerpts":"\n\n".join(excerpts[:8]) or "No matching terms found"})
-                except Exception as exc:
-                    records.append({"Source":name,"Type":kind,"URL":url,"Retrieved UTC":"FAILED","Text length":0,"Evidence excerpts":str(exc)})
-        st.session_state["records"] = records
+        payload={
+            "company":st.session_state.get("research_company",company),
+            "generated_utc":datetime.now(timezone.utc).isoformat(),
+            "status":"RESEARCH PREVIEW — not an independently verified autonomous discovery",
+            "evidence_strength":"UNASSESSED",
+            "source_count":len(records),
+            "distinct_source_hosts":cross_check(records),
+            "candidate_leads":investigate_claims(records),
+            "working_hypothesis":findings.get("hypothesis",""),
+            "counterargument":findings.get("counterargument",""),
+            "falsification_condition":findings.get("falsification",""),
+            "adversarial_review_checked":findings.get("checks",[]),
+            "sources":records,"retrieval_failures":st.session_state.get("failures",[])
+        }
+        md=[
+            "# FINTRACE AI — Research Preview",
+            f"Company: {payload['company']}",
+            f"Generated: {payload['generated_utc']}",
+            "**Status: unverified research preview; not an investment recommendation.**",
+            "## Working hypothesis",
+            payload["working_hypothesis"] or "Not yet developed.",
+            "## Why it matters",
+            "To be established from verified findings.",
+            "## Financial calculations",
+            "Reproduce values in the Financial Analysis tab using primary-source figures.",
+            "## Timeline",
+            "Not validated; dated source events require analyst review.",
+            "## Counterargument",
+            payload["counterargument"] or "Not yet assessed.",
+            "## Falsification condition",
+            payload["falsification_condition"] or "Not yet specified.",
+            "## Evidence strength",
+            "UNASSESSED (do not claim Strong/Moderate/Weak before validation).",
+            "## Traceable source excerpts"
+        ]
+        for i,s in enumerate(records,1):
+            md.extend([f"### [{i}] {s['title']}",s["url"],f"Retrieved: {s['retrieved_utc']}"])
+            for x in s["excerpts"]:
+                md.append(f"- {x['page']} — {x['topic']}: {x['excerpt']}")
+        st.download_button("Download research brief (.md)","\\n\\n".join(md),"fintrace_research_brief.md","text/markdown")
+        st.download_button("Download full evidence ledger (.json)",json.dumps(payload,indent=2,ensure_ascii=False),"fintrace_evidence.json","application/json")
+        st.download_button("Download evidence table (.csv)",pd.DataFrame([{"title":s["title"],"url":s["url"],"page":x["page"],"topic":x["topic"],"excerpt":x["excerpt"]} for s in records for x in s["excerpts"]]).to_csv(index=False),"fintrace_evidence.csv","text/csv")
+        st.success("The exported brief includes evidence links and explicit uncertainty labels.")
 
-if "records" in st.session_state:
-    st.subheader("Evidence ledger")
-    for record in st.session_state["records"]:
-        with st.expander(f"{record['Source']} — {record['Retrieved UTC']}"):
-            st.markdown(f"[Open original source]({record['URL']}) · {record['Type']}")
-            st.write(record["Evidence excerpts"])
-    st.download_button("Export evidence log (CSV)", pd.DataFrame(st.session_state["records"]).to_csv(index=False).encode("utf-8"), "evidence_log.csv", "text/csv")
-
-st.subheader("Hypothesis lab — transparent calculations")
-st.caption("Enter verified, period-matched financial figures. Initial values illustrate HUL FY26 USG/UVG disclosure, not an autonomous discovery.")
-a,b,c = st.columns(3)
-with a:
-    sales = st.number_input("Underlying sales growth (%)", value=5.0, step=0.1)
-with b:
-    vol = st.number_input("Underlying volume growth (%)", value=4.0, step=0.1)
-with c:
-    if vol <= -100:
-        st.metric("Implied price/mix residual", "Not defined")
-    else:
-        residual = ((1 + sales/100) / (1 + vol/100) - 1) * 100
-        st.metric("Implied price/mix residual", f"{residual:.2f}%")
-st.caption("Multiplicative decomposition: (1 + sales growth)/(1 + volume growth) − 1. Only valid when reporting definitions, periods, and scopes align. A price/mix residual is not pure pricing.")
-left,right = st.columns(2)
-with left:
-    rec = st.number_input("Trade receivables (₹ crore)", min_value=0.0, value=0.0)
-    revenue = st.number_input("Comparable annual revenue (₹ crore)", min_value=0.0, value=0.0)
-with right:
-    prior = st.number_input("Prior receivable days", min_value=0.0, value=0.0)
-    days = 365*rec/revenue if revenue>0 else None
-    st.metric("Approximate receivable days", f"{days:.1f}" if days is not None else "Enter figures")
-    if days is not None and prior>0:
-        st.metric("Change vs prior (days)", f"{days-prior:+.1f}")
-st.caption("Approximation: closing trade receivables / annual revenue × 365. Prefer average receivables and credit sales where disclosed. Match accounting scope.")
-
-st.subheader("Adversarial review: counter-hypotheses")
-for question in [
-    "Could acquisitions, disposals or category mix explain the growth difference?",
-    "Are periods and consolidated/standalone accounting scopes comparable?",
-    "Do competitors exhibit the same sector-wide pattern?",
-    "Could seasonality or changing credit terms explain receivables?",
-    "Are two genuinely independent primary sources supporting the finding?"
-]:
-    st.checkbox(question)
-st.warning("Evidence strength: UNASSESSED. Completing checkboxes does not establish source independence or prove a hypothesis.")
-st.markdown('**Falsification template:** “This hypothesis would be weakened if [specific metric] returns to [defined threshold] for [number of periods], confirmed by [source].”')
+st.divider()
+st.caption("FINTRACE AI · Experimental research tool · Public information only · No investment recommendations")
